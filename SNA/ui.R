@@ -16,22 +16,33 @@ shinyUI(fluidPage(
         dataTableOutput("chat")
       ),
       tabPanel(
-        "FCA",
-        plotOutput("fc_conceptos", width = "150%", height = "800px"),
-        verbatimTextOutput("fc_implicaciones")
-      ),
-      tabPanel(
         "Text Mining",
+        plotOutput("tiempo"),
         plotOutput("nummensajes"),
         plotOutput("longmensaje"),
+        plotOutput("numpalabras"),
+        plotOutput("palabrasusadas"),
+        plotOutput("palabrasusadasuser"),
         plotOutput("emojisusados"),
         plotOutput("emojisusadosuser"),
-        plotOutput("palabrasusadas"),
-        plotOutput("palabrasusadasuser")
+        plotOutput("sentimientosemoji")
+        
       ),
       tabPanel(
         "Reglas de Asociacion",
         verbatimTextOutput("arules")
+      ),
+      tabPanel(
+        "FCA",
+        tabsetPanel(
+          tabPanel(
+            "Conceptos",
+            plotOutput("fc_conceptos", width = "150%", height = "800px")),
+          tabPanel(
+            "Implicaciones",
+            verbatimTextOutput("fc_implicaciones")
+          )
+        )
       )
     )
   )

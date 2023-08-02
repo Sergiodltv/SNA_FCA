@@ -9,9 +9,14 @@ library(ggplot2)
 library(ggimage)
 library(stopwords)
 library(tidytext)
+library(textdata)
+library(rvest)
+library(knitr)
+library(RColorBrewer)
 
 shinyServer(function(input, output) {
   
+  #Cargamos y modificamos el dataframe del chat
   chat <- reactive({
     req(input$archivo)
     chat <- rwa_read(input$archivo$datapath)
@@ -52,6 +57,7 @@ shinyServer(function(input, output) {
     return(chat)
   })
   
+  #Creamos un dataframe para los emojis
   chat_emoji <- reactive({
     chat_emoji <- chat() %>% 
       unnest(emoji) %>% 
@@ -65,6 +71,7 @@ shinyServer(function(input, output) {
     return(chat_emoji)
   })
   
+  #Creamos un dataframe para los mensajes
   mensajes <- reactive({
     chat_in <- chat()
     
@@ -131,19 +138,55 @@ shinyServer(function(input, output) {
     return(multimedia)
   })
   
+  #Dataframe para los sentimientos con emojis
+  emoji_sentimientos <- reactive({
+    chat_in <- chat()
+    emojis <- chat_emoji()
+    
+    url_base <- "http://kt.ijs.si/data/Emoji_sentiment_ranking/index.html"
+    doc <- read_html(url_base)
+    
+    tabla_emojis <- doc %>% 
+      html_node("#myTable") %>% 
+      html_table() %>% 
+      as_tibble()
+    
+    sentimiento_emoji <- tabla_emojis %>% 
+      select(1,6:9) %>% 
+      set_names("char", "negativo","neutral","positivo","sent.score")
+    
+    emoji_chat <- emojis %>% 
+      inner_join(sentimiento_emoji, by=c("emoji"="char")) 
+    
+    emoji_sentimientos_usuarios <- emoji_chat %>% 
+      group_by(autor) %>% 
+      summarise(positivo=mean(positivo),
+                negativo=mean(negativo),
+                neutral=mean(neutral),
+                balance=mean(sent.score)) %>% 
+      arrange(desc(balance))
+    
+    return(emoji_sentimientos_usuarios)
+    
+  })
+  
   df <- reactive({
     mensajes <- mensajes()
     emojis <- emojis()
     multimedia <- multimedia()
+    sentimientos <- sentimientos()
     
     meanmensajes <- mean(mensajes$nummensajes)
     meanlongitud <- mean(mensajes$longmensaje)
     meanemojis <- mean(emojis$num)
     meanmultimedia <- mean(multimedia$num)
+    meanpalabras <- mean(sentimientos$WordCount)
     
     df <- data.frame(
       "Pocos mensajes" = mensajes$nummensajes < meanmensajes,
       "Muchos mensajes" = mensajes$nummensajes >= meanmensajes,
+      "pocas palabras" = sentimientos$WordCount < meanpalabras,
+      "Muchas palabras" = sentimientos$WordCount >= meanpalabras,
       "Poca longitud" = mensajes$longmensaje < 70,
       "Mucha longitud" = mensajes$longmensaje >= 70,
       "Pocos emojis" = emojis$num < meanemojis,
@@ -165,16 +208,25 @@ shinyServer(function(input, output) {
     return(fc)
   })
   
+  chat_arules <- reactive({
+    chat_arules <- as(df(), "transactions")
+    
+    return(chat_arules)
+  })
+  
+  #CARGAR CHAT
   output$chat <- renderDataTable({
     chat()
   })
   
-  output$fc_conceptos <- renderPlot({
-    fc()$concepts$plot()
-  })
-  
-  output$fc_implicaciones <- renderPrint({
-    fc()$implications$print()
+  #TEXT MINING
+  output$tiempo <- renderPlot({
+    chat_tiempo <- chat() %>%
+      mutate(fecha = as.Date(fecha)) %>% 
+      count(fecha, name = "mensajes")
+    
+    ggplot(chat_tiempo, aes(x=fecha, y=mensajes))+
+      geom_line() + ggtitle("Mensajes a lo largo del tiempo") + theme_minimal()
   })
   
   output$nummensajes <- renderPlot({
@@ -193,38 +245,16 @@ shinyServer(function(input, output) {
       theme_minimal()
   })
   
-  output$emojisusados <- renderPlot({
-    chat_emoji <- chat_emoji() %>% 
-      group_by(emoji) %>% 
-      summarize(num = sum(n)) %>% 
-      arrange(desc(num)) %>% 
-      top_n(15, num) %>% 
-      mutate(emoji_url = map_chr(emoji, 
-                                 ~paste0("https://abs.twimg.com/emoji/v2/72x72/",
-                                         as.hexmode(utf8ToInt(.x)), ".png")))
+  output$numpalabras <- renderPlot({
+    sentimientos <- sentimientos()
     
-    ggplot(chat_emoji, aes(x=emoji, y=num, fill = factor(emoji))) +
-      geom_col(show.legend = FALSE) + geom_image(aes(image = emoji_url), size = .05, width = .05) +
-      ggtitle("Emojis mas usados") + theme_minimal() +
-      theme(axis.text.x = element_blank(),
-            axis.ticks.x = element_blank())
-    
-  })
-  
-  output$emojisusadosuser <- renderPlot({
-    chat_emoji <- chat_emoji() %>% 
-      select(autor, n, emoji, emoji_url) %>% 
-      group_by(autor) %>% 
-      top_n(1, wt = n) %>%
-      ungroup()
-    
-    ggplot(chat_emoji, aes(x=autor, y=n, fill = factor(autor))) +
-      geom_col(show.legend = FALSE) + geom_image(aes(image = emoji_url), size = .05) +
-      ggtitle("Emoji mas usado por usuario") + theme_minimal()
+    ggplot(sentimientos, aes(x=autor, y=WordCount, fill = factor(autor))) +
+      geom_col(show.legend = FALSE) +  ggtitle("Numero de palabras por usuario") + 
+      theme_minimal()
   })
   
   output$palabrasusadas <- renderPlot({
-    palabras <- c(stopwords(language = "es"), "adjunto" , "2022", "audio", "opus",
+    palabras <- c(stopwords("es"), "adjunto" , "2022", "audio", "opus",
                   "03", "04", "05", "11", "12", "14", "15", "13", "16", "17",
                   "imagen", "omitida", "omitido", "webp", "01", "02", "06", "07", "08", 
                   "09", "10", "18", "19", "20", "21", "22", "23", "24", "25", 
@@ -248,7 +278,7 @@ shinyServer(function(input, output) {
   })
   
   output$palabrasusadasuser <- renderPlot({
-    palabras <- c(stopwords(language = "es"), "adjunto" , "2022", "audio", "opus",
+    palabras <- c(stopwords("es"), "adjunto" , "2022", "audio", "opus",
                   "03", "04", "05", "11", "12", "14", "15", "13", "16", "17",
                   "imagen", "omitida", "omitido", "webp", "01", "02", "06", "07", "08", 
                   "09", "10", "18", "19", "20", "21", "22", "23", "24", "25", 
@@ -274,11 +304,68 @@ shinyServer(function(input, output) {
       coord_flip() + theme_minimal()
   })
   
-  output$arules <- renderPrint({
-    chat_arules <- as(df(), "transactions")
+  output$emojisusados <- renderPlot({
+    chat_emoji <- chat_emoji() %>% 
+      group_by(emoji) %>% 
+      summarize(num = sum(n)) %>% 
+      arrange(desc(num)) %>% 
+      top_n(15, num) %>% 
+      mutate(emoji_url = map_chr(emoji, 
+                                 ~paste0("https://abs.twimg.com/emoji/v2/72x72/",
+                                         as.hexmode(utf8ToInt(.x)), ".png")))
     
-    reglas <- apriori(chat_arules,parameter=list(support=.5, confidence=.9))
+    ggplot(chat_emoji, aes(x=emoji, y=num, fill = factor(emoji))) +
+      geom_col(show.legend = FALSE) + geom_image(aes(image = emoji_url), size = .05) +
+      ggtitle("Emojis mas usados") + theme_minimal() +
+      theme(axis.text.x = element_blank(),
+            axis.ticks.x = element_blank())
+    
+  })
+  
+  output$emojisusadosuser <- renderPlot({
+    chat_emoji <- chat_emoji() %>% 
+      select(autor, n, emoji, emoji_url) %>% 
+      group_by(autor) %>% 
+      top_n(1, wt = n) %>%
+      ungroup()
+    
+    ggplot(chat_emoji, aes(x=autor, y=n, fill = factor(autor))) +
+      geom_col(show.legend = FALSE) + geom_image(aes(image = emoji_url), size = .05) +
+      ggtitle("Emoji mas usado por usuario") + theme_minimal()
+  })
+  
+  output$sentimientosemoji <- renderPlot({
+    emoji_sentimientos <- emoji_sentimientos()
+    
+    final_emoji <- emoji_sentimientos %>% 
+      mutate(negativo = -negativo,
+             neutral.pos = neutral/2,
+             neutral.neg = -neutral/2) %>% 
+      select(-neutral) %>% 
+      gather("sentiment","mean", -autor, -balance) %>% 
+      mutate(sentiment = factor(sentiment, levels = c("negativo", "neutral.neg", "positivo", "neutral.pos"), ordered = TRUE))
+    
+    ggplot(final_emoji, aes(x=reorder(autor,balance), y=mean, fill=sentiment)) +
+      geom_bar(position="stack", stat="identity", show.legend = FALSE, width = .5) +
+      scale_fill_manual(values = brewer.pal(4,"RdYlGn")[c(1,2,4,2)]) +
+      ylab("Negativo | Neutral | Positivo") + xlab("Usuario") +
+      ggtitle("Análisis de sentimientos por usuario basado en emojis") +
+      coord_flip() + theme_minimal()
+  })
+  
+  #ARULES
+  output$arules <- renderPrint({
+    reglas <- apriori(chat_arules(),parameter=list(support=.5, confidence=.9))
     summary(reglas)
+  })
+  
+  #FCA
+  output$fc_conceptos <- renderPlot({
+    fc()$concepts$plot()
+  })
+  
+  output$fc_implicaciones <- renderPrint({
+    fc()$implications$print()
   })
   
 })
