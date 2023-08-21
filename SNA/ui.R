@@ -25,11 +25,18 @@ shinyUI(fluidPage(
         plotOutput("palabrasusadasuser"),
         plotOutput("emojisusados"),
         plotOutput("emojisusadosuser"),
-        plotOutput("sentimientosemoji")
+        plotOutput("sentimientosemoji"),
+        plotOutput("sentimientoslexico"),
+        plotOutput("emociones"),
+        plotOutput("emocionesuser")
         
       ),
       tabPanel(
         "Reglas de Asociacion",
+        sidebarPanel(
+          checkboxGroupInput("checkbox", "Seleccione los usuarios sobre los que se crearan las reglas de asociación:",
+                             choices = NULL)
+        ),
         verbatimTextOutput("arules")
       ),
       tabPanel(

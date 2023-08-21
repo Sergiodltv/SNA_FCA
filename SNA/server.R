@@ -13,8 +13,9 @@ library(textdata)
 library(rvest)
 library(knitr)
 library(RColorBrewer)
+library(syuzhet)
 
-shinyServer(function(input, output) {
+shinyServer(function(input, output, session) {
   
   #Cargamos y modificamos el dataframe del chat
   chat <- reactive({
@@ -22,9 +23,9 @@ shinyServer(function(input, output) {
     chat <- rwa_read(input$archivo$datapath)
     
     chat <- chat %>% 
-      select(time, author, text, emoji)
+      select(time, author, text, emoji, emoji_name)
     
-    colnames(chat) <- c("fecha", "autor", "texto", "emoji")
+    colnames(chat) <- c("fecha", "autor", "texto", "emoji", "nombre_emoji")
     
     chat <- chat %>% 
       mutate(multimedia = str_detect(texto, "omitid")) %>% 
@@ -59,7 +60,7 @@ shinyServer(function(input, output) {
   
   #Creamos un dataframe para los emojis
   chat_emoji <- reactive({
-    chat_emoji <- chat() %>% 
+    chat <- chat() %>% 
       unnest(emoji) %>% 
       mutate(emoji = str_sub(emoji, end = 1)) %>% 
       count(autor, emoji, sort = TRUE) %>%
@@ -68,19 +69,19 @@ shinyServer(function(input, output) {
                                  ~paste0("https://abs.twimg.com/emoji/v2/72x72/",
                                          as.hexmode(utf8ToInt(.x)), ".png")))
     
-    return(chat_emoji)
+    return(chat)
   })
   
   #Creamos un dataframe para los mensajes
   mensajes <- reactive({
-    chat_in <- chat()
+    chat <- chat()
     
-    mensajes <- chat_in %>% 
+    mensajes <- chat %>% 
       group_by(autor) %>% 
       summarise(nummensajes = n(),
                 longmensaje = mean(ncaracteres))
     
-    autor <- as.character(na.omit(unique(chat_in$autor)))
+    autor <- as.character(na.omit(unique(chat$autor)))
     num <- length(autor)
     
     for(i in 1:num){
@@ -95,15 +96,16 @@ shinyServer(function(input, output) {
     return(mensajes)
   })
   
+  #Creamos un dataframe para saber el numero de emojis
   emojis <- reactive({
-    chat_in <- chat()
-    chat_emoji_in <- chat_emoji()
+    chat <- chat()
+    chat_emoji <- chat_emoji()
     
-    emojis <- chat_emoji_in %>% 
+    emojis <- chat_emoji %>% 
       group_by(autor) %>% 
       summarise(num = sum(n))
     
-    autor <- as.character(na.omit(unique(chat_in$autor)))
+    autor <- as.character(na.omit(unique(chat$autor)))
     num <- length(autor)
     
     for(i in 1:num){
@@ -117,14 +119,15 @@ shinyServer(function(input, output) {
     return(emojis)
   })
   
+  #Creamos un dataframe con la multimedia
   multimedia <- reactive({
-    chat_in <- chat()
+    chat <- chat()
     
-    multimedia <- chat_in %>% 
+    multimedia <- chat %>% 
       group_by(autor) %>% 
       summarise(num = sum(multimedia))
     
-    autor <- as.character(na.omit(unique(chat_in$autor)))
+    autor <- as.character(na.omit(unique(chat$autor)))
     num <- length(autor)
     
     for(i in 1:num){
@@ -138,10 +141,31 @@ shinyServer(function(input, output) {
     return(multimedia)
   })
   
-  #Dataframe para los sentimientos con emojis
+  #Creamos un dataframe con el numero de palabras por autor
+  numpalabras <- reactive({
+    chat <- chat() %>%  
+      unnest_tokens(input = texto, output = word) %>% 
+      count(autor)
+    
+    return(chat)
+  })
+  
+  #Creamos un elemento reactivo tipo lista para saber cuales son las palabras que no otorgan significado en nuestro chat
+  palabras <- reactive({
+    palabras <- c(stopwords("es"), "adjunto" , "2022", "audio", "opus",
+                  "03", "04", "05", "11", "12", "14", "15", "13", "16", "17",
+                  "imagen", "omitida", "omitido", "webp", "01", "02", "06", "07", "08", 
+                  "09", "10", "18", "19", "20", "21", "22", "23", "24", "25", 
+                  "26", "27", "28", "29", "00", "sticker", "photo", "jpg", "2021",
+                  "30", "31", "33", "vm.tiktok.com", "puto", "puta", "pene", "cabrón", "pito")
+    
+    return(palabras)
+  })
+  
+  #Creamos un dataframe para los sentimientos con emojis
   emoji_sentimientos <- reactive({
-    chat_in <- chat()
-    emojis <- chat_emoji()
+    chat <- chat()
+    chat_emojis <- chat_emoji()
     
     url_base <- "http://kt.ijs.si/data/Emoji_sentiment_ranking/index.html"
     doc <- read_html(url_base)
@@ -155,10 +179,10 @@ shinyServer(function(input, output) {
       select(1,6:9) %>% 
       set_names("char", "negativo","neutral","positivo","sent.score")
     
-    emoji_chat <- emojis %>% 
+    sent_emojis <- chat_emojis %>% 
       inner_join(sentimiento_emoji, by=c("emoji"="char")) 
     
-    emoji_sentimientos_usuarios <- emoji_chat %>% 
+    sent_emojis_usuarios <- sent_emojis %>% 
       group_by(autor) %>% 
       summarise(positivo=mean(positivo),
                 negativo=mean(negativo),
@@ -166,27 +190,102 @@ shinyServer(function(input, output) {
                 balance=mean(sent.score)) %>% 
       arrange(desc(balance))
     
-    return(emoji_sentimientos_usuarios)
-    
+    return(sent_emojis_usuarios)
   })
   
+  #Creamos un dataframe con los sentimientos con lexico afinn
+  sentlexico <- reactive({
+    palabras <- palabras()
+    
+    lexico <- get_sentiments("afinn")
+    
+    chat <- chat() %>% 
+      unnest_tokens(input = texto, output = palabra) %>% 
+      filter(!palabra %in% palabras) %>% 
+      select(autor, palabra) %>% 
+      inner_join(lexico, by=c("palabra"="word")) %>% 
+      count(autor, value) %>% 
+      group_by(autor) %>% 
+      mutate(mean=n/sum(n)) %>% 
+      ungroup()
+    
+    chat <- chat %>% 
+      mutate(mean = ifelse(value<0, -mean, mean)) %>% 
+      group_by(autor) %>% 
+      mutate(balance = sum(mean)) %>% 
+      ungroup()
+    
+    return(chat)
+  })
+  
+  #Creamos un dataframe con las emociones con lexico nrc
+  emocioneslexico <- reactive({
+    palabras <- palabras()
+    
+    lexico <- get_sentiments("nrc")
+    
+    chat <- chat() %>% 
+      unnest_tokens(input = texto, output = palabra) %>% 
+      filter(!palabra %in% palabras) %>%
+      inner_join(lexico, by=c("palabra"="word")) %>% 
+      filter(!sentiment %in% c("negative", "positive")) %>% 
+      count(sentiment) %>% 
+      arrange(desc(n))
+    
+    return(chat)
+  })
+  
+  #Creamos un dataframe con las emociones con lexico nrc por usuario
+  emocioneslexicousuario <- reactive({
+    palabras <- palabras()
+    
+    lexico <- get_sentiments("nrc")
+    
+    chat <- chat() %>% 
+      unnest_tokens(input = texto, output = palabra) %>% 
+      filter(!palabra %in% palabras) %>%
+      inner_join(lexico, by=c("palabra"="word")) %>% 
+      filter(!sentiment %in% c("negative", "positive")) %>% 
+      count(sentiment, autor, sort = TRUE) %>% 
+      arrange(autor, desc(n))
+    
+    return(chat)
+  })
+  
+  #Creamos un elemento reactivo para saber cuantos usuarios hay en el chat
+  autores <- reactive({
+    chat <- chat()
+    
+    autor <- as.character(na.omit(unique(chat$autor)))
+    
+    return(autor)
+  })
+  
+  #Metodo para hacer un checkbox con el numero de usuarios de cada chat cargado
+  observe({
+    autores <- autores()
+    
+    updateCheckboxGroupInput(session, "checkbox", choices = autores)
+  })
+  
+  #Creamos un dataframe para poder aplicar arules y FCA
   df <- reactive({
     mensajes <- mensajes()
     emojis <- emojis()
     multimedia <- multimedia()
-    sentimientos <- sentimientos()
+    numpalabras <- numpalabras()
     
     meanmensajes <- mean(mensajes$nummensajes)
     meanlongitud <- mean(mensajes$longmensaje)
     meanemojis <- mean(emojis$num)
     meanmultimedia <- mean(multimedia$num)
-    meanpalabras <- mean(sentimientos$WordCount)
+    meanpalabras <- mean(numpalabras$n)
     
     df <- data.frame(
       "Pocos mensajes" = mensajes$nummensajes < meanmensajes,
       "Muchos mensajes" = mensajes$nummensajes >= meanmensajes,
-      "pocas palabras" = sentimientos$WordCount < meanpalabras,
-      "Muchas palabras" = sentimientos$WordCount >= meanpalabras,
+      "pocas palabras" = numpalabras$n < meanpalabras,
+      "Muchas palabras" = numpalabras$n >= meanpalabras,
       "Poca longitud" = mensajes$longmensaje < 70,
       "Mucha longitud" = mensajes$longmensaje >= 70,
       "Pocos emojis" = emojis$num < meanemojis,
@@ -200,6 +299,7 @@ shinyServer(function(input, output) {
     return(df)
   })
   
+  #Creamos el contexto formal para aplicar FCA
   fc <- reactive({
     fc <- FormalContext$new(df())
     fc$find_concepts()
@@ -208,11 +308,13 @@ shinyServer(function(input, output) {
     return(fc)
   })
   
+  #Creamos las transacciones con arules para aplicar Reglas de Asociacion
   chat_arules <- reactive({
     chat_arules <- as(df(), "transactions")
     
     return(chat_arules)
   })
+  
   
   #CARGAR CHAT
   output$chat <- renderDataTable({
@@ -221,18 +323,18 @@ shinyServer(function(input, output) {
   
   #TEXT MINING
   output$tiempo <- renderPlot({
-    chat_tiempo <- chat() %>%
+    chat <- chat() %>%
       mutate(fecha = as.Date(fecha)) %>% 
       count(fecha, name = "mensajes")
     
-    ggplot(chat_tiempo, aes(x=fecha, y=mensajes))+
+    ggplot(chat, aes(x=fecha, y=mensajes))+
       geom_line() + ggtitle("Mensajes a lo largo del tiempo") + theme_minimal()
   })
   
   output$nummensajes <- renderPlot({
     mensajes <- mensajes()
     
-    ggplot(mensajes, aes(x=autor, y=nummensajes, fill = factor(autor))) + 
+    ggplot(mensajes, aes(x=nummensajes, y=autor, fill = factor(autor))) + 
       geom_col(show.legend = FALSE) + ggtitle("Numero de mensajes") + 
       theme_minimal()
   })
@@ -240,36 +342,31 @@ shinyServer(function(input, output) {
   output$longmensaje <- renderPlot({
     mensajes <- mensajes()
     
-    ggplot(mensajes, aes(x=autor, y=longmensaje, fill = factor(autor))) +
+    ggplot(mensajes, aes(x=longmensaje, y=autor, fill = factor(autor))) +
       geom_col(show.legend = FALSE) +  ggtitle("Longitud de mensaje por usuario") + 
       theme_minimal()
   })
   
   output$numpalabras <- renderPlot({
-    sentimientos <- sentimientos()
+    numpalabras <- numpalabras()
     
-    ggplot(sentimientos, aes(x=autor, y=WordCount, fill = factor(autor))) +
-      geom_col(show.legend = FALSE) +  ggtitle("Numero de palabras por usuario") + 
+    ggplot(numpalabras, aes(x = n, y = autor, fill = factor(autor))) +
+      geom_col(show.legend = FALSE) + ggtitle("Número de palabras enviadas por usuario") +
       theme_minimal()
   })
   
   output$palabrasusadas <- renderPlot({
-    palabras <- c(stopwords("es"), "adjunto" , "2022", "audio", "opus",
-                  "03", "04", "05", "11", "12", "14", "15", "13", "16", "17",
-                  "imagen", "omitida", "omitido", "webp", "01", "02", "06", "07", "08", 
-                  "09", "10", "18", "19", "20", "21", "22", "23", "24", "25", 
-                  "26", "27", "28", "29", "00", "sticker", "photo", "jpg", "2021",
-                  "30", "31", "33", "vm.tiktok.com", "puto", "puta")
+    palabras <- palabras()
     
-    chat_extra <- chat() %>% 
+    chat <- chat() %>% 
       unnest_tokens(input = texto, output = word) %>% 
       filter(!word %in% palabras) %>% 
       count(word) %>% 
       top_n(30, n) %>% 
       arrange(desc(n))
     
-    ggplot(chat_extra, aes(x=reorder(word, n), y=n, fill=n, color=n))+
-      geom_col(show.legend = FALSE, width = .1) +
+    ggplot(chat, aes(x=reorder(word, n), y=n, fill=n, color=n))+
+      geom_col(show.legend = FALSE, width = .05) +
       geom_point(show.legend = FALSE, size = 3) +
       scale_fill_gradient(low = "#2b83ba", high = "#d7191c") + 
       scale_color_gradient(low = "#2b83ba", high = "#d7191c") +
@@ -278,14 +375,9 @@ shinyServer(function(input, output) {
   })
   
   output$palabrasusadasuser <- renderPlot({
-    palabras <- c(stopwords("es"), "adjunto" , "2022", "audio", "opus",
-                  "03", "04", "05", "11", "12", "14", "15", "13", "16", "17",
-                  "imagen", "omitida", "omitido", "webp", "01", "02", "06", "07", "08", 
-                  "09", "10", "18", "19", "20", "21", "22", "23", "24", "25", 
-                  "26", "27", "28", "29", "00", "sticker", "photo", "jpg", "2021",
-                  "30", "31", "33", "vm.tiktok.com", "puto", "puta")
+    palabras <- palabras()
     
-    chat_extra <- chat() %>% 
+    chat <- chat() %>% 
       unnest_tokens(input = texto, output = word) %>% 
       filter(!word %in% palabras) %>% 
       count(autor, word, sort = TRUE) %>%
@@ -295,8 +387,8 @@ shinyServer(function(input, output) {
       arrange(autor, desc(n)) %>% 
       mutate(order=row_number())
     
-    ggplot(chat_extra, aes(x=reorder(word, n), y=n, fill=autor, color=autor))+
-      geom_col(show.legend = FALSE, width = .1) +
+    ggplot(chat, aes(x=reorder(word, n), y=n, fill=autor, color=autor))+
+      geom_col(show.legend = FALSE, width = .05) +
       geom_point(show.legend = FALSE, size = 3) +
       ggtitle("Palabras más usadas por usuario") + 
       xlab("Palabras") + ylab("Veces usada") +
@@ -319,7 +411,6 @@ shinyServer(function(input, output) {
       ggtitle("Emojis mas usados") + theme_minimal() +
       theme(axis.text.x = element_blank(),
             axis.ticks.x = element_blank())
-    
   })
   
   output$emojisusadosuser <- renderPlot({
@@ -340,16 +431,50 @@ shinyServer(function(input, output) {
     final_emoji <- emoji_sentimientos %>% 
       mutate(negativo = -negativo,
              neutral.pos = neutral/2,
-             neutral.neg = -neutral/2) %>% 
+             neutral.neg = -neutral/2) %>%
       select(-neutral) %>% 
       gather("sentiment","mean", -autor, -balance) %>% 
       mutate(sentiment = factor(sentiment, levels = c("negativo", "neutral.neg", "positivo", "neutral.pos"), ordered = TRUE))
     
-    ggplot(final_emoji, aes(x=reorder(autor,balance), y=mean, fill=sentiment)) +
+    ggplot(final_emoji, aes(x=autor, y=mean, fill=sentiment)) +
       geom_bar(position="stack", stat="identity", show.legend = FALSE, width = .5) +
       scale_fill_manual(values = brewer.pal(4,"RdYlGn")[c(1,2,4,2)]) +
       ylab("Negativo | Neutral | Positivo") + xlab("Usuario") +
       ggtitle("Análisis de sentimientos por usuario basado en emojis") +
+      coord_flip() + theme_minimal()
+  })
+  
+  output$sentimientoslexico <- renderPlot({
+    chat <- sentlexico()
+    
+    ggplot(chat, aes(x=autor, y=mean, fill=value)) +
+      geom_bar(stat="identity",position="stack", show.legend = F, width = .5) +
+      xlab("Usuario") + ylab("Escala de negativo a positivo") +
+      coord_flip() +
+      ggtitle("Análisis de sentimientos por usuario basado en el léxico AFINN") +
+      theme_minimal()
+  })
+  
+  output$emociones <- renderPlot({
+    chat <- emocioneslexico()
+    
+    ggplot(chat, aes(x=reorder(sentiment, n), y=n, fill=n, color=n)) +
+      geom_col(show.legend = FALSE, width = .05) +
+      geom_point(show.legend = FALSE, size = 3) +
+      scale_fill_gradient(low = "#2b83ba", high = "#d7191c") + 
+      scale_color_gradient(low = "#2b83ba", high = "#d7191c") +
+      ggtitle("Emociones más expresadas") + xlab("Veces expresada") + ylab("Emociones") + 
+      coord_flip() + theme_minimal()
+  })
+  
+  output$emocionesuser <- renderPlot({
+    chat <- emocioneslexicousuario()
+    
+    ggplot(chat, aes(x=reorder(sentiment, n), y=n, fill=autor, color=autor)) +
+      geom_col(show.legend = FALSE, width = .05) +
+      geom_point(show.legend = FALSE, size = 3) +
+      ggtitle("Emociones más expresadas por usuario") + xlab("Veces expresada") + ylab("Emociones") + 
+      facet_wrap(~autor, ncol = 3, scales = "free") +
       coord_flip() + theme_minimal()
   })
   
