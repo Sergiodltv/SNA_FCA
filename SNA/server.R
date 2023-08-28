@@ -265,7 +265,19 @@ shinyServer(function(input, output, session) {
   observe({
     autores <- autores()
     
-    updateCheckboxGroupInput(session, "checkbox", choices = autores)
+    updateCheckboxGroupInput(session, "checkboxRA", choices = autores)
+  })
+  
+  observe({
+    autores <- autores()
+    
+    updateCheckboxGroupInput(session, "checkboxFCAConcepts", choices = autores)
+  })
+  
+  observe({
+    autores <- autores()
+    
+    updateCheckboxGroupInput(session, "checkboxFCAImplications", choices = autores)
   })
   
   #Creamos un dataframe para poder aplicar arules y FCA
@@ -300,8 +312,24 @@ shinyServer(function(input, output, session) {
   })
   
   #Creamos el contexto formal para aplicar FCA
-  fc <- reactive({
-    fc <- FormalContext$new(df())
+  fcConceptos <- reactive({
+    req(input$checkboxFCAConcepts)
+    
+    df <- df()[rownames(df()) %in% input$checkboxFCAConcepts]
+    
+    fc <- FormalContext$new(df)
+    fc$find_concepts()
+    fc$find_implications()
+    
+    return(fc)
+  })
+  
+  fcImplicaciones <- reactive({
+    req(input$checkboxFCAImplications)
+    
+    df <- df()[rownames(df()) %in% input$checkboxFCAImplications]
+    
+    fc <- FormalContext$new(df)
     fc$find_concepts()
     fc$find_implications()
     
@@ -310,7 +338,11 @@ shinyServer(function(input, output, session) {
   
   #Creamos las transacciones con arules para aplicar Reglas de Asociacion
   chat_arules <- reactive({
-    chat_arules <- as(df(), "transactions")
+    req(input$checkboxRA)
+    
+    df <- df()[rownames(df()) %in% input$checkboxRA]
+    
+    chat_arules <- as(df, "transactions")
     
     return(chat_arules)
   })
@@ -486,11 +518,11 @@ shinyServer(function(input, output, session) {
   
   #FCA
   output$fc_conceptos <- renderPlot({
-    fc()$concepts$plot()
+    fcConceptos()$concepts$plot()
   })
   
   output$fc_implicaciones <- renderPrint({
-    fc()$implications$print()
+    fcImplicaciones()$implications$print()
   })
   
 })
