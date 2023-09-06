@@ -261,11 +261,21 @@ shinyServer(function(input, output, session) {
     return(autor)
   })
   
+  atributos <- reactive({
+    return(colnames(df()))
+  })
+  
   #Metodo para hacer un checkbox con el numero de usuarios de cada chat cargado
   observe({
     autores <- autores()
     
-    updateCheckboxGroupInput(session, "checkboxRA", choices = autores)
+    updateCheckboxGroupInput(session, "checkboxRA1", choices = autores)
+  })
+  
+  observe({
+    atributos <- atributos()
+    
+    updateCheckboxGroupInput(session, "checkboxRA2", choices = atributos)
   })
   
   observe({
@@ -294,16 +304,16 @@ shinyServer(function(input, output, session) {
     meanpalabras <- mean(numpalabras$n)
     
     df <- data.frame(
-      "Pocos mensajes" = mensajes$nummensajes < meanmensajes,
-      "Muchos mensajes" = mensajes$nummensajes >= meanmensajes,
-      "pocas palabras" = numpalabras$n < meanpalabras,
-      "Muchas palabras" = numpalabras$n >= meanpalabras,
-      "Poca longitud" = mensajes$longmensaje < 70,
-      "Mucha longitud" = mensajes$longmensaje >= 70,
-      "Pocos emojis" = emojis$num < meanemojis,
-      "Muchos emojis" = emojis$num >= meanemojis,
-      "Poca multimedia" = multimedia$num < meanmultimedia,
-      "Mucha multimedia" = multimedia$num >= meanmultimedia
+      "Pocos.mensajes" = mensajes$nummensajes < meanmensajes,
+      "Muchos.mensajes" = mensajes$nummensajes >= meanmensajes,
+      "Pocas.palabras" = numpalabras$n < meanpalabras,
+      "Muchas.palabras" = numpalabras$n >= meanpalabras,
+      "Poca.longitud" = mensajes$longmensaje < 70,
+      "Mucha.longitud" = mensajes$longmensaje >= 70,
+      "Pocos.emojis" = emojis$num < meanemojis,
+      "Muchos.emojis" = emojis$num >= meanemojis,
+      "Poca.multimedia" = multimedia$num < meanmultimedia,
+      "Mucha.multimedia" = multimedia$num >= meanmultimedia
     )
     
     rownames(df) <- unique(chat()$autor)
@@ -326,27 +336,52 @@ shinyServer(function(input, output, session) {
   
   fcImplicaciones <- reactive({
     req(input$checkboxFCAImplications)
+    #req(input$checkboxFCAImplications1)
+    #req(input$checkboxFCAImplications2)
     
     df <- df()[rownames(df()) %in% input$checkboxFCAImplications]
     
     fc <- FormalContext$new(df)
     fc$find_concepts()
     fc$find_implications()
+    #fc$implications$filter(lhs = "Pocos.mensajes", "Pocos.emojis", "Poca.multimedia")
     
     return(fc)
   })
   
   #Creamos las transacciones con arules para aplicar Reglas de Asociacion
-  chat_arules <- reactive({
-    req(input$checkboxRA)
+  chat_arules1 <- reactive({
+    req(input$checkboxRA1)
     
-    df <- df()[rownames(df()) %in% input$checkboxRA]
+    df <- df()[rownames(df()) %in% input$checkboxRA1]
     
     chat_arules <- as(df, "transactions")
     
     return(chat_arules)
   })
   
+  chat_arules2 <- reactive({
+    req(input$checkboxRA1)
+    req(input$checkboxRA2)
+    
+    df <- df()[rownames(df()) %in% input$checkboxRA1, colnames(df()) %in% input$checkboxRA2]
+    
+    chat_arules <- as(df, "transactions")
+    
+    return(chat_arules)
+  })
+  
+  #DESCARGA DE GRAFICOS
+  descargar_grafico <- function(id, plot_func) {
+    downloadHandler(
+      filename = function() {
+        paste("grafico", id, ".jpg")
+      },
+      content = function(file) {
+        ggsave(file, plot = plot_func(), width = 12)
+      }
+    )
+  }
   
   #CARGAR CHAT
   output$chat <- renderDataTable({
@@ -354,40 +389,76 @@ shinyServer(function(input, output, session) {
   })
   
   #TEXT MINING
-  output$tiempo <- renderPlot({
+  #Duracion de la conversacion
+  tiempo <- reactive({
     chat <- chat() %>%
       mutate(fecha = as.Date(fecha)) %>% 
       count(fecha, name = "mensajes")
     
     ggplot(chat, aes(x=fecha, y=mensajes))+
-      geom_line() + ggtitle("Mensajes a lo largo del tiempo") + theme_minimal()
+      geom_line() + ggtitle("Mensajes a lo largo del tiempo") + 
+      xlab("Fecha") + ylab("Número de mensajes") + 
+      theme_minimal()
   })
   
-  output$nummensajes <- renderPlot({
+  output$tiempo <- renderPlot({
+    tiempo()
+  })
+  
+  output$descarga1 <- descargar_grafico(1, tiempo)
+  
+  #Numero de mensajes
+  nummensajes <- reactive({
     mensajes <- mensajes()
     
     ggplot(mensajes, aes(x=nummensajes, y=autor, fill = factor(autor))) + 
-      geom_col(show.legend = FALSE) + ggtitle("Numero de mensajes") + 
+      geom_col(show.legend = FALSE) + ggtitle("Número de mensajes") + 
+      xlab("Número de mensajes") + ylab("Autor") +
+      theme_minimal()
+  })
+  
+  output$nummensajes <- renderPlot({
+    nummensajes()
+  })
+  
+  output$descarga2 <- descargar_grafico(2, nummensajes)
+  
+  #Longitud de los mensajes
+  longmensaje <- reactive({
+    mensajes <- mensajes()
+    
+    ggplot(mensajes, aes(x=longmensaje, y=autor, fill = factor(autor))) +
+      geom_col(show.legend = FALSE) + 
+      ggtitle("Longitud media de mensaje por usuario") + 
+      xlab("Longitud media de mensaje") + ylab("Autor") +
       theme_minimal()
   })
   
   output$longmensaje <- renderPlot({
-    mensajes <- mensajes()
+    longmensaje()
+  })
+  
+  output$descarga3 <- descargar_grafico(3, longmensaje)
+  
+  #Numero de plabaras enviadas
+  numwords <- reactive({
+    numpalabras <- numpalabras()
     
-    ggplot(mensajes, aes(x=longmensaje, y=autor, fill = factor(autor))) +
-      geom_col(show.legend = FALSE) +  ggtitle("Longitud de mensaje por usuario") + 
+    ggplot(numpalabras, aes(x = n, y = autor, fill = factor(autor))) +
+      geom_col(show.legend = FALSE) + 
+      ggtitle("Número de palabras enviadas por usuario") +
+      xlab("Número de palabras") + ylab("Autor") +
       theme_minimal()
   })
   
   output$numpalabras <- renderPlot({
-    numpalabras <- numpalabras()
-    
-    ggplot(numpalabras, aes(x = n, y = autor, fill = factor(autor))) +
-      geom_col(show.legend = FALSE) + ggtitle("Número de palabras enviadas por usuario") +
-      theme_minimal()
+    numwords()
   })
   
-  output$palabrasusadas <- renderPlot({
+  output$descarga4 <- descargar_grafico(4, numwords)
+  
+  #Palabras mas usadas
+  palabrasusadas <- reactive({
     palabras <- palabras()
     
     chat <- chat() %>% 
@@ -406,7 +477,14 @@ shinyServer(function(input, output, session) {
       coord_flip() + theme_minimal()
   })
   
-  output$palabrasusadasuser <- renderPlot({
+  output$palabrasusadas <- renderPlot({
+    palabrasusadas()
+  })
+  
+  output$descarga5 <- descargar_grafico(5, palabrasusadas)
+  
+  #Palabras mas usadas por usuario
+  palabrasusadasuser <- reactive({
     palabras <- palabras()
     
     chat <- chat() %>% 
@@ -428,24 +506,40 @@ shinyServer(function(input, output, session) {
       coord_flip() + theme_minimal()
   })
   
-  output$emojisusados <- renderPlot({
+  output$palabrasusadasuser <- renderPlot({
+    palabrasusadasuser()
+  })
+  
+  output$descarga6 <- descargar_grafico(6, palabrasusadasuser)
+  
+  #Emojis mas usados
+  emojisusados <- reactive({
     chat_emoji <- chat_emoji() %>% 
       group_by(emoji) %>% 
       summarize(num = sum(n)) %>% 
       arrange(desc(num)) %>% 
-      top_n(15, num) %>% 
+      top_n(20, num) %>% 
       mutate(emoji_url = map_chr(emoji, 
                                  ~paste0("https://abs.twimg.com/emoji/v2/72x72/",
                                          as.hexmode(utf8ToInt(.x)), ".png")))
     
     ggplot(chat_emoji, aes(x=emoji, y=num, fill = factor(emoji))) +
       geom_col(show.legend = FALSE) + geom_image(aes(image = emoji_url), size = .05) +
-      ggtitle("Emojis mas usados") + theme_minimal() +
+      ggtitle("Emojis mas usados") + 
+      xlab("Veces usado") + ylab("Emoji") + 
+      theme_minimal() +
       theme(axis.text.x = element_blank(),
             axis.ticks.x = element_blank())
   })
   
-  output$emojisusadosuser <- renderPlot({
+  output$emojisusados <- renderPlot({
+    emojisusados()
+  })
+  
+  output$descarga7 <- descargar_grafico(7, emojisusados)
+  
+  #Emojis mas usados por usuario
+  emojisusadosuser <- reactive({
     chat_emoji <- chat_emoji() %>% 
       select(autor, n, emoji, emoji_url) %>% 
       group_by(autor) %>% 
@@ -453,11 +547,19 @@ shinyServer(function(input, output, session) {
       ungroup()
     
     ggplot(chat_emoji, aes(x=autor, y=n, fill = factor(autor))) +
-      geom_col(show.legend = FALSE) + geom_image(aes(image = emoji_url), size = .05) +
-      ggtitle("Emoji mas usado por usuario") + theme_minimal()
+      geom_col(show.legend = FALSE) + geom_image(aes(image = emoji_url), size = .1) +
+      ggtitle("Emoji mas usado por usuario") + 
+      xlab("Veces usado") + ylab("Autor") + theme_minimal()
   })
   
-  output$sentimientosemoji <- renderPlot({
+  output$emojisusadosuser <- renderPlot({
+    emojisusadosuser()
+  })
+  
+  output$descarga8 <- descargar_grafico(8, emojisusadosuser)
+  
+  #Sentimietos por emojis
+  sentimientosemoji <- reactive({
     emoji_sentimientos <- emoji_sentimientos()
     
     final_emoji <- emoji_sentimientos %>% 
@@ -476,7 +578,14 @@ shinyServer(function(input, output, session) {
       coord_flip() + theme_minimal()
   })
   
-  output$sentimientoslexico <- renderPlot({
+  output$sentimientosemoji <- renderPlot({
+    sentimientosemoji()
+  })
+  
+  output$descarga9 <- descargar_grafico(9, sentimientosemoji)
+  
+  #Sentimientos por palabras
+  sentimientoslexico <- reactive({
     chat <- sentlexico()
     
     ggplot(chat, aes(x=autor, y=mean, fill=value)) +
@@ -487,7 +596,14 @@ shinyServer(function(input, output, session) {
       theme_minimal()
   })
   
-  output$emociones <- renderPlot({
+  output$sentimientoslexico <- renderPlot({
+    sentimientoslexico()
+  })
+  
+  output$descarga10 <- descargar_grafico(10, sentimientoslexico)
+  
+  #Emociones
+  emociones <- reactive({
     chat <- emocioneslexico()
     
     ggplot(chat, aes(x=reorder(sentiment, n), y=n, fill=n, color=n)) +
@@ -499,7 +615,14 @@ shinyServer(function(input, output, session) {
       coord_flip() + theme_minimal()
   })
   
-  output$emocionesuser <- renderPlot({
+  output$emociones <- renderPlot({
+    emociones()
+  })
+  
+  output$descarga11 <- descargar_grafico(11, emociones)
+  
+  #Emociones por usuario
+  emocionesuser <- reactive({
     chat <- emocioneslexicousuario()
     
     ggplot(chat, aes(x=reorder(sentiment, n), y=n, fill=autor, color=autor)) +
@@ -510,17 +633,30 @@ shinyServer(function(input, output, session) {
       coord_flip() + theme_minimal()
   })
   
+  output$emocionesuser <- renderPlot({
+    emocionesuser()
+  })
+  
+  output$descarga12 <- descargar_grafico(12, emocionesuser)
+  
   #ARULES
-  output$arules <- renderPrint({
-    reglas <- apriori(chat_arules(),parameter=list(support=.5, confidence=.9))
+  output$resumen <- renderPrint({
+    reglas <- apriori(chat_arules1(),parameter=list(support=.5, confidence=.9))
     summary(reglas)
   })
   
+  output$reglas <- renderPrint({
+    reglas <- apriori(chat_arules2(),parameter=list(support=.5, confidence=.9))
+    inspect(reglas)
+  })
+  
   #FCA
+  #Conceptos
   output$fc_conceptos <- renderPlot({
     fcConceptos()$concepts$plot()
   })
   
+  #Implicaciones
   output$fc_implicaciones <- renderPrint({
     fcImplicaciones()$implications$print()
   })
